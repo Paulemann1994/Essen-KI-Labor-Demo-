@@ -1,28 +1,70 @@
-# app_verstaendlichkeit.py – Essen-Branding + großes Sidebar-Logo + Wide-Layout
-# + Beispiel-Lader mit exakter Ausrichtung + Textfeld darunter
-# + Auto-Anonymisieren + Lesbarkeit + erweiterte Checkliste
-# + PII-Guards mit Platzhalter-Ignore
-# + Prompt-Patches (Abkürzungen, Zeitzone, Kanal) + Kompakt-Modus + Token-Warnung
+# app_verstaendlichkeit_paragraphen.py
+# Stadt Essen · KI-Labor – Verwaltungstexte in 3 Verständlichkeitsstufen
+# Upgrades:
+# - Hilfe & Impressum dauerhaft in Sidebar
+# - Live Wort/Zeichen-Zähler
+# - Session-Verlauf (letzte 3 Läufe)
+# - Vorher/Nachher-Diff (unified)
+# - Optionaler PDF-Export mit Logo (wenn reportlab vorhanden)
 
-import os, re
+import os, re, difflib, io
+from datetime import datetime
+
 import streamlit as st
 from dotenv import load_dotenv
 from openai import OpenAI
 from branding import brand_header
 
-# -------------------- Setup --------------------
+# Optional: PDF-Export (falls lib vorhanden)
+try:
+    from reportlab.lib.pagesizes import A4
+    from reportlab.pdfgen import canvas
+    from reportlab.lib.units import cm
+    REPORTLAB_OK = True
+except Exception:
+    REPORTLAB_OK = False
+
+# -------------------- Setup & API-Key --------------------
+st.set_page_config(page_title="KI-Labor: Verwaltungstexte", layout="wide")
 load_dotenv()
-api_key = os.getenv("OPENAI_API_KEY")
+
+def get_api_key():
+    # 1) .env / Umgebungsvariable
+    key = os.getenv("OPENAI_API_KEY")
+    if key:
+        return key
+    # 2) Streamlit-Secrets: [general] oder top-level
+    try:
+        key = (st.secrets.get("general", {}) or {}).get("OPENAI_API_KEY")
+        if key:
+            return key
+        key = st.secrets.get("OPENAI_API_KEY")
+        if key:
+            return key
+    except Exception:
+        pass
+    return None
+
+api_key = get_api_key()
+if not api_key:
+    st.error(
+        "OPENAI_API_KEY nicht gefunden. Bitte in **Settings → Secrets** setzen.\n\n"
+        "Beispiel (TOML):\n\n"
+        "[general]\nOPENAI_API_KEY = \"sk-…\"\n\n[DEMO]\nUSER = \"essen-demo\"\nPASS = \"gutertext2025\"\n\nDEMO_MODE = \"1\""
+    )
+    st.stop()
+
 client = OpenAI(api_key=api_key)
 
-st.set_page_config(page_title="KI-Labor: Verwaltungstexte", layout="wide")
+# Branding-Header
 brand_header(
     title="Stadt Essen · KI-Labor",
     subtitle="Verwaltungstexte in 3 Verständlichkeitsstufen",
     logo_path="assets/essen_logo.png",
-    color="#004f9f"
+    color="#004f9f",
 )
-# --- Demo-Login (liest zuerst Streamlit-Secrets, sonst ENV) ---
+
+# Demo-Login (optional über Secrets aktivierbar)
 def require_demo_login():
     demo_secrets = st.secrets.get("DEMO", {}) if hasattr(st, "secrets") else {}
     DEMO_USER = demo_secrets.get("USER") or os.getenv("DEMO_USER", "")
@@ -43,10 +85,37 @@ def require_demo_login():
         if not st.session_state.get("auth_ok"):
             st.stop()
 require_demo_login()
-# Großes Logo oben in der Sidebar (falls vorhanden)
+
+# -------------------- Hilfe & Impressum (Sidebar – immer sichtbar) --------------------
 with st.sidebar:
-    if os.path.exists("assets/essen_logo.png"):
-        st.image("assets/essen_logo.png", use_container_width=True)
+    st.markdown("### Hilfe & Impressum")
+
+    with st.expander("❓ Hilfe – Kurzüberblick", expanded=False):
+        st.markdown("""
+**Was macht dieses Tool?**  
+Es formuliert amtliche Texte sprachlich um – **ohne** Inhalte/Fristen zu verändern – und erzeugt drei Varianten:
+- *Juristisch präzise*
+- *Praxisnah für Mitarbeitende*
+- *Bürgernah einfach*
+
+**So geht’s**
+1. Optional ein **Beispiel** wählen → **Beispiel laden**.  
+2. **🧼 Automatisch anonymisieren** (keine realen PII verwenden).  
+3. Checkbox bestätigen → **Text umwandeln**.
+
+**Nicht eingeben:** PII, besondere Kategorien, Verschlusssachen, Geheimnisse Dritter (siehe Hinweisbox).
+""")
+
+    with st.expander("ℹ️ Impressum (Demo/PoC)", expanded=False):
+        st.markdown("""
+**Stadt Essen – [Fachbereich / OE]**  
+[Straße Nr.], [PLZ Ort]  
+E-Mail: [kontakt@example.de] · Tel.: [0201 / …]
+
+**Verantwortlich für den Inhalt:** [Name, Funktion]  
+**Datenschutz:** Keine produktiven personenbezogenen Daten eingeben.  
+**Hinweis:** Demoversion ausschließlich für interne Tests.
+""")
 
 # -------------------- Sensibilisierung --------------------
 with st.expander("🔒 Nutzungs- & Datenschutz-Hinweis (bitte lesen)"):
@@ -66,7 +135,6 @@ with st.expander("🔒 Nutzungs- & Datenschutz-Hinweis (bitte lesen)"):
 # -------------------- Sidebar-Optionen --------------------
 with st.sidebar:
     st.header("Einstellungen")
-    # statt Multiselect: Checkboxen – ausgeschrieben
     chk_j = st.checkbox("Juristisch präzise", value=True)
     chk_p = st.checkbox("Praxisnah für Mitarbeitende", value=True)
     chk_b = st.checkbox("Bürgernah einfach", value=True)
@@ -125,17 +193,15 @@ def _load_sample(choice: str):
     }
     st.session_state["eingabe"] = mapping.get(choice, "")
 
-# -------------------- Eingabe-Block (Ausrichtung + Textfeld darunter) --------------------
+# -------------------- Eingabe-Block --------------------
 st.subheader("Eingabe")
 
-# Gemeinsame Label-Zeile für perfekte Ausrichtung
 lab1, lab2 = st.columns([3, 1])
 with lab1:
     st.markdown("**Beispiel auswählen (optional)**")
 with lab2:
-    st.markdown("&nbsp;")  # optischer Spacer
+    st.markdown("&nbsp;")
 
-# Auswahl links, Button rechts – exakt gleiche Linie
 col1, col2 = st.columns([3, 1])
 with col1:
     sample_choice = st.selectbox(
@@ -149,7 +215,6 @@ with col1:
 with col2:
     st.button("Beispiel laden", on_click=_load_sample, args=(sample_choice,), use_container_width=True)
 
-# Textfeld direkt darunter (außerhalb der Spalten!)
 DEFAULT_TEXT = ("Der Antrag ist schriftlich bis spätestens sechs Wochen vor Fristende einzureichen. "
                 "Unvollständige Anträge können nicht berücksichtigt werden.")
 if "eingabe" not in st.session_state or st.session_state["eingabe"] is None:
@@ -162,7 +227,15 @@ eingabe = st.text_area(
     placeholder="Text hier einfügen oder über „Beispiel laden“ einsetzen …",
 )
 
-# -------------------- Helfer: Anonymisieren / Lesbarkeit / Checkliste --------------------
+# Live-Zähler
+def _count_words_chars(text: str):
+    words = re.findall(r"\w+", text, re.UNICODE)
+    return len(words), len(text)
+
+wcount, ccount = _count_words_chars(st.session_state.get("eingabe", ""))
+st.caption(f"Wörter: {wcount} · Zeichen: {ccount}")
+
+# -------------------- Helfer-Tools --------------------
 REPLACEMENTS = {
     r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}": "[E-Mail]",
     r"\b(?:\+49[\s\-]?)?(?:0\d{2,5}[\s\-]?)\d{3,}\s?\d{2,}\b": "[Telefon]",
@@ -210,7 +283,6 @@ CHECKS.update({
 def quality_flags(t: str):
     return {label: bool(re.search(pat, t, flags=re.IGNORECASE)) for label, pat in CHECKS.items()}
 
-# PII-Prüfung: echte Muster; Platzhalter vorher entfernen
 PII_REGEX = {
     "E-Mail": r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}",
     "Telefon": r"\b(?:\+49[\s\-]?)?(?:0\d{2,5}[\s\-]?)\d{3,}\s?\d{2,}\b",
@@ -229,11 +301,10 @@ def find_pii(text: str) -> dict:
         if m: hits[label] = len(m)
     return hits
 
-# Session-State safe callbacks
 def _anonymize_state():
     st.session_state["eingabe"] = anonymize_text(st.session_state.get("eingabe", ""))
 
-# Drei Helfer-Buttons in einer Zeile (mittlere Spalte etwas breiter)
+# Drei Helfer-Buttons in einer Zeile
 bcols = st.columns([1, 1.5, 1])
 if bcols[0].button("🔍 Lesbarkeit prüfen"):
     fre, level, s, w = readability_de(st.session_state.get("eingabe", ""))
@@ -270,8 +341,7 @@ Vorgaben:
 - Kein Modell-Disclaimer in der Ausgabe; nur, falls unten gefordert.
 
 Text:
-\"\"\"{text}\"\"\"
-
+\"\"\"{text}\"\"\"\n
 {hinweis}
 """.strip()
 
@@ -289,6 +359,64 @@ def call_llm(prompt: str, temperature: float, max_tokens: int):
     out_toks = usage.output_tokens if usage else None
     est_cost = (in_toks/1_000_000)*0.60 + (out_toks/1_000_000)*2.40 if (in_toks is not None and out_toks is not None) else None
     return out, in_toks, out_toks, est_cost
+
+# -------------------- PDF-Export (optional) --------------------
+def build_pdf_bytes(title: str, original: str, output_md: str, logo_path: str = "assets/essen_logo.png") -> bytes:
+    """Sehr einfacher PDF-Exporter (reiner Text) – funktioniert nur, wenn reportlab vorhanden ist."""
+    buf = io.BytesIO()
+    c = canvas.Canvas(buf, pagesize=A4)
+    width, height = A4
+    y = height - 2*cm
+
+    # Logo (optional)
+    if os.path.exists(logo_path):
+        try:
+            c.drawImage(logo_path, x=2*cm, y=y-1.6*cm, width=2.2*cm, height=1.6*cm, preserveAspectRatio=True, mask='auto')
+        except Exception:
+            pass
+    # Titel & Datum
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(4.6*cm, y, title)
+    c.setFont("Helvetica", 9)
+    c.drawRightString(width-2*cm, y, datetime.now().strftime("%d.%m.%Y %H:%M"))
+
+    y -= 1.2*cm
+    c.setFont("Helvetica-Bold", 11); c.drawString(2*cm, y, "Original")
+    y -= 0.5*cm
+    c.setFont("Helvetica", 10)
+    for para in (original or "").split("\n"):
+        y = _pdf_wrapped_line(c, para, y, width)
+    y -= 0.6*cm
+    c.setFont("Helvetica-Bold", 11); c.drawString(2*cm, y, "Umschreibung")
+    y -= 0.5*cm
+    c.setFont("Helvetica", 10)
+    for para in (output_md or "").split("\n"):
+        y = _pdf_wrapped_line(c, para, y, width)
+
+    c.showPage(); c.save()
+    buf.seek(0)
+    return buf.read()
+
+def _pdf_wrapped_line(c, text, y, page_w):
+    left = 2*cm
+    right = page_w - 2*cm
+    max_w = right - left
+    if y < 3*cm:
+        c.showPage(); y = A4[1] - 2*cm; c.setFont("Helvetica", 10)
+    # simple wrap
+    words = text.split(" ")
+    line = ""
+    for w in words:
+        probe = (line + " " + w).strip()
+        if c.stringWidth(probe, "Helvetica", 10) <= max_w:
+            line = probe
+        else:
+            c.drawString(left, y, line); y -= 0.42*cm; line = w
+            if y < 3*cm:
+                c.showPage(); y = A4[1]-2*cm; c.setFont("Helvetica", 10)
+    if line:
+        c.drawString(left, y, line); y -= 0.42*cm
+    return y
 
 # -------------------- Aktion --------------------
 if st.button("Text umwandeln", disabled=not confirm):
@@ -310,23 +438,81 @@ if st.button("Text umwandeln", disabled=not confirm):
             out, in_toks, out_toks, est_cost = call_llm(prompt, creativity, max_out)
 
             st.markdown("### Ergebnis")
-            # Markdown-Rendering -> Umbruch ohne horizontales Scrollen
-            st.markdown(out)
+            st.markdown(out)  # Markdown-Rendering (kein horizontaler Scroll)
 
-            # Kopierfreundliche Rohansicht
+            # Vorher/Nachher-Diff
+            with st.expander("Vorher/Nachher – Diff (Text)"):
+                diff = difflib.unified_diff(
+                    text_current.splitlines(),
+                    out.splitlines(),
+                    fromfile="Original",
+                    tofile="Umschreibung",
+                    lineterm=""
+                )
+                st.code("\n".join(diff), language="diff")
+
+            # Rohtext + Downloads
             with st.expander("Rohtext anzeigen (kopierbar)"):
                 st.text_area("Rohtext", out, height=260)
 
-            # Download
             md = f"# Verwaltungstext – Verständlichkeitsstufen\n\n**Original**\n\n{text_current}\n\n---\n\n{out}\n"
             st.download_button("Ergebnis als Markdown herunterladen", data=md,
                                file_name="verstaendlichkeit.md", mime="text/markdown")
 
-            # Kosten & Token-Hinweis
+            if REPORTLAB_OK:
+                pdf_bytes = build_pdf_bytes(
+                    title="Stadt Essen · KI-Labor – Verwaltungstexte",
+                    original=text_current,
+                    output_md=out,
+                    logo_path="assets/essen_logo.png"
+                )
+                st.download_button("Ergebnis als PDF herunterladen", data=pdf_bytes,
+                                   file_name="verstaendlichkeit.pdf", mime="application/pdf")
+            else:
+                st.button("Ergebnis als PDF herunterladen (ReportLab fehlt)", disabled=True, help="Füge 'reportlab' in requirements.txt hinzu, um PDF zu aktivieren.")
+
+            # Kosten/Token
             if est_cost is not None:
                 st.caption(f"Token: in {in_toks}, out {out_toks} · ~Kosten: ${est_cost:.4f}")
                 if out_toks == max_out:
                     st.warning("Antwort hat die Token-Obergrenze erreicht – Text könnte abgeschnitten sein. "
                                "Erhöhe 'Max. Antwortlänge' oder aktiviere den Kompakt-Modus.")
+
+            # Verlauf speichern (max 3)
+            hist = st.session_state.get("history", [])
+            hist.insert(0, {
+                "ts": datetime.now().strftime("%d.%m.%Y %H:%M"),
+                "original": text_current,
+                "output": out,
+                "settings": {
+                    "variants": variants, "ansprache": ansprache,
+                    "temp": creativity, "max_out": max_out, "kompakt": kompakt
+                }
+            })
+            st.session_state["history"] = hist[:3]
+
         except Exception as e:
             st.error(f"Fehler bei der Anfrage: {e}")
+
+# -------------------- Verlauf (Sidebar) --------------------
+with st.sidebar:
+    st.markdown("---")
+    st.markdown("### Verlauf (Session)")
+    hist = st.session_state.get("history", [])
+    if not hist:
+        st.caption("Noch keine Ergebnisse in dieser Sitzung.")
+    else:
+        labels = [f"{i+1}. {item['ts']} – {', '.join(item['settings']['variants'] or ['Bürgernah'])}" for i, item in enumerate(hist)]
+        pick = st.selectbox("Ergebnis auswählen", options=list(range(len(hist))), format_func=lambda i: labels[i])
+        if st.button("Ausgewähltes Ergebnis anzeigen"):
+            st.session_state["preview"] = hist[pick]
+
+# Live-Preview aus dem Verlauf (falls geklickt)
+if st.session_state.get("preview"):
+    st.markdown("### Vorschau aus Verlauf")
+    prev = st.session_state["preview"]
+    st.markdown(prev["output"])
+
+# -------------------- Footer --------------------
+st.markdown("---")
+st.caption("Demo · intern · Stadt Essen – KI-Labor · Diese Anwendung ist ein Prototyp und ersetzt keine Rechts- oder Fachprüfung.")
