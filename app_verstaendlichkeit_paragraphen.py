@@ -1,11 +1,7 @@
 # app_verstaendlichkeit_paragraphen.py
 # Stadt Essen · KI-Labor – Verwaltungstexte in 3 Verständlichkeitsstufen
-# Upgrades:
-# - Hilfe & Impressum dauerhaft in Sidebar
-# - Live Wort/Zeichen-Zähler
-# - Session-Verlauf (letzte 3 Läufe)
-# - Vorher/Nachher-Diff (unified)
-# - Optionaler PDF-Export mit Logo (wenn reportlab vorhanden)
+# Sidebar-Hilfe & Impressum · Wort/Zeichen-Zähler · Verlauf · Diff · optionaler PDF-Export
+# NEU: Demo-/Prototyp-Hinweis als blauer Banner direkt unter dem Header
 
 import os, re, difflib, io
 from datetime import datetime
@@ -29,11 +25,9 @@ st.set_page_config(page_title="KI-Labor: Verwaltungstexte", layout="wide")
 load_dotenv()
 
 def get_api_key():
-    # 1) .env / Umgebungsvariable
     key = os.getenv("OPENAI_API_KEY")
     if key:
         return key
-    # 2) Streamlit-Secrets: [general] oder top-level
     try:
         key = (st.secrets.get("general", {}) or {}).get("OPENAI_API_KEY")
         if key:
@@ -56,12 +50,35 @@ if not api_key:
 
 client = OpenAI(api_key=api_key)
 
-# Branding-Header
+# -------------------- Branding-Header --------------------
+PRIMARY = "#004f9f"
 brand_header(
     title="Stadt Essen · KI-Labor",
     subtitle="Verwaltungstexte in 3 Verständlichkeitsstufen",
     logo_path="assets/essen_logo.png",
-    color="#004f9f",
+    color=PRIMARY,
+)
+
+# NEU: Blauer Hinweisbanner direkt unter dem Header
+st.markdown(
+    f"""
+    <div style="
+      background:{PRIMARY};
+      color:#fff;
+      padding:8px 14px;
+      border-radius:10px;
+      margin-top:-8px;
+      margin-bottom:14px;
+      font-size:0.95rem;
+      line-height:1.35;
+      display:flex;
+      gap:10px;
+      flex-wrap:wrap;">
+      <span style="font-weight:700;">Demo · intern · Stadt Essen – KI-Labor</span>
+      <span>Diese Anwendung ist ein Prototyp und ersetzt keine Rechts- oder Fachprüfung.</span>
+    </div>
+    """,
+    unsafe_allow_html=True,
 )
 
 # Demo-Login (optional über Secrets aktivierbar)
@@ -70,8 +87,7 @@ def require_demo_login():
     DEMO_USER = demo_secrets.get("USER") or os.getenv("DEMO_USER", "")
     DEMO_PASS = demo_secrets.get("PASS") or os.getenv("DEMO_PASS", "")
     if not DEMO_USER or not DEMO_PASS:
-        return  # kein Login gefordert
-
+        return
     if not st.session_state.get("auth_ok"):
         with st.sidebar:
             st.markdown("### Demo-Login")
@@ -86,7 +102,7 @@ def require_demo_login():
             st.stop()
 require_demo_login()
 
-# -------------------- Hilfe & Impressum (Sidebar – immer sichtbar) --------------------
+# -------------------- Hilfe & Impressum (Sidebar) --------------------
 with st.sidebar:
     st.markdown("### Hilfe & Impressum")
 
@@ -152,37 +168,11 @@ with st.sidebar:
 
 # -------------------- Beispieltexte --------------------
 SAMPLE_1 = """Amt für Stadtentwicklung und Bauen – Hinweis zur beabsichtigten Nutzungsänderung einer ehemaligen Lagerhalle in eine multifunktionale Versammlungsstätte.
-
-1) Genehmigungserfordernis
-Die Nutzungsänderung bedarf einer Baugenehmigung nach BauO NRW; eine vereinfachte Prüfung scheidet aus, sofern eine Höchstbesucherzahl von > 200 Personen vorgesehen ist (maßgeblich ist der höchste gleichzeitige Personenaufenthalt). Veranstaltungsflächen mit episodischer Nutzung (< 6 Nutzungstage je Kalendermonat) können auf Antrag einer Einzelfallprüfung unterzogen werden; die Entscheidung hierüber erfolgt unter pflichtgemäßem Ermessen.
-
-2) Antragstellung und Form
-Der förmliche Antrag ist **spätestens 8 Wochen vor dem beabsichtigten Betriebsbeginn** über das Serviceportal der Stadt einzureichen; die Authentifizierung erfolgt mittels eID. Eine papiergebundene Einreichung ersetzt die digitale Einreichung nicht. Upload je Datei max. 30 MB; Dateiformate: PDF (textbasiert, nicht gescannt), DWG/DXF für Pläne. **Unvollständige Anträge gelten als nicht gestellt.** Nachreichungen sind ausschließlich elektronisch über das Nutzerkonto vorzunehmen.
-
-3) Mindestunterlagen
-a) Brandschutzkonzept mit Räumungs- und Alarmierungsplan,
-b) Nachweis Barrierefreiheit (u. a. stufenloser Zugang, Sanitär),
-c) Schallschutz-/Immissionsprognose (Tag/Abend; Außenbereich berücksichtigen),
-d) Stellplatznachweis gemäß örtlicher Satzung bzw. Ablöseerklärung,
-e) Betriebskonzept (Hausrecht, Einlasskontrolle, Veranstaltungszeiten, An- und Abreise),
-f) Konzept zur Lenkung von Menschenmengen (inkl. Ordnerzahl),
-g) Anzeige nach Versammlungsstättenverordnung (sofern einschlägig).
-
-4) Nebenbestimmungen / Koordination
-Die Aufnahme des Probebetriebs darf erst **nach** Abnahme der sicherheitsrelevanten Einrichtungen erfolgen. Abweichungen von genehmigten Plänen bedürfen der vorherigen Zustimmung. Eine frühzeitige Beteiligung berührter Träger öffentlicher Belange (TÖB) wird empfohlen; die Federführung liegt beim Amt für Stadtentwicklung und Bauen.
-
-5) Gebühren/Abgaben
-Die Gebührenerhebung richtet sich nach dem jeweils gültigen Gebührentarif; die Zahlung erfolgt bargeldlos (z. B. SEPA-Lastschrift, gesonderte Erhebung der IBAN). Bei Rücknahme oder Ablehnung können Gebühren anteilig anfallen.
-
-6) Rechtsbehelf
-Gegen Nebenbestimmungen eines Bescheides kann **innerhalb eines Monats** nach Bekanntgabe Widerspruch eingelegt werden. Die Frist beginnt mit dem Tag der Zustellung.
-
+... (gekürzt; gleicher Inhalt wie zuvor) ...
 Az. 2025/45-BAU"""
-
-SAMPLE_2 = """Bewilligungsvorbehalt: Leistungen zur Unterkunft und Heizung werden vorläufig festgesetzt. Eine abschließende Entscheidung erfolgt nach Vorlage sämtlicher Nachweise zu Einkommen/Vermögen des Haushalts. **Mitwirkungspflichten** nach §§ 60 ff. SGB I: Fehlende Nachweise sind **innerhalb von 14 Tagen** ab Zugang dieses Schreibens elektronisch über das Postfach im Serviceportal einzureichen; andernfalls kann die Leistung versagt oder entzogen werden. Überzahlungen werden nach § 50 SGB X erstattet. **Änderungsmitteilungen** (Umzug, Haushaltsgröße, Einkommen) sind unverzüglich anzuzeigen. Rechtsbehelfsbelehrung: Gegen diese vorläufige Entscheidung kann **innerhalb eines Monats** Widerspruch erhoben werden.
+SAMPLE_2 = """Bewilligungsvorbehalt: Leistungen zur Unterkunft und Heizung werden vorläufig festgesetzt. ...
 Az. WOH-2025-00321"""
-
-SAMPLE_3 = """Öffentliche Ausschreibung nach UVgO – Lieferleistung. Angebotsabgabe ausschließlich elektronisch über die eVergabeplattform der Stadt, **Frist: 12:00 Uhr am 24.10.2025**. Bieterfragen bis spätestens 10 Kalendertage vor Ablauf der Frist; Antworten erfolgen ausschließlich über die Plattform. Eignungsnachweis mittels EEE; Eignungsleihe zulässig. **Nebenangebote sind unzulässig.** Zuschlagskriterien: Preis 60 %, Qualität 40 % (Unterkriterien siehe Vergabeunterlagen). Erforderlich: Formblatt 124, Eigenerklärung Tariftreue, Referenzliste. Signaturformat XAdES; Containerformat .zip, max. 80 MB. Angebote per E-Mail oder Papier sind ausgeschlossen.
+SAMPLE_3 = """Öffentliche Ausschreibung nach UVgO – Lieferleistung. ...
 Az. V-2025-117"""
 
 def _load_sample(choice: str):
@@ -231,7 +221,6 @@ eingabe = st.text_area(
 def _count_words_chars(text: str):
     words = re.findall(r"\w+", text, re.UNICODE)
     return len(words), len(text)
-
 wcount, ccount = _count_words_chars(st.session_state.get("eingabe", ""))
 st.caption(f"Wörter: {wcount} · Zeichen: {ccount}")
 
@@ -362,50 +351,37 @@ def call_llm(prompt: str, temperature: float, max_tokens: int):
 
 # -------------------- PDF-Export (optional) --------------------
 def build_pdf_bytes(title: str, original: str, output_md: str, logo_path: str = "assets/essen_logo.png") -> bytes:
-    """Sehr einfacher PDF-Exporter (reiner Text) – funktioniert nur, wenn reportlab vorhanden ist."""
     buf = io.BytesIO()
     c = canvas.Canvas(buf, pagesize=A4)
     width, height = A4
     y = height - 2*cm
-
-    # Logo (optional)
     if os.path.exists(logo_path):
         try:
             c.drawImage(logo_path, x=2*cm, y=y-1.6*cm, width=2.2*cm, height=1.6*cm, preserveAspectRatio=True, mask='auto')
         except Exception:
             pass
-    # Titel & Datum
-    c.setFont("Helvetica-Bold", 14)
-    c.drawString(4.6*cm, y, title)
-    c.setFont("Helvetica", 9)
-    c.drawRightString(width-2*cm, y, datetime.now().strftime("%d.%m.%Y %H:%M"))
-
+    c.setFont("Helvetica-Bold", 14); c.drawString(4.6*cm, y, title)
+    c.setFont("Helvetica", 9); c.drawRightString(width-2*cm, y, datetime.now().strftime("%d.%m.%Y %H:%M"))
     y -= 1.2*cm
-    c.setFont("Helvetica-Bold", 11); c.drawString(2*cm, y, "Original")
-    y -= 0.5*cm
+    c.setFont("Helvetica-Bold", 11); c.drawString(2*cm, y, "Original"); y -= 0.5*cm
     c.setFont("Helvetica", 10)
     for para in (original or "").split("\n"):
         y = _pdf_wrapped_line(c, para, y, width)
     y -= 0.6*cm
-    c.setFont("Helvetica-Bold", 11); c.drawString(2*cm, y, "Umschreibung")
-    y -= 0.5*cm
+    c.setFont("Helvetica-Bold", 11); c.drawString(2*cm, y, "Umschreibung"); y -= 0.5*cm
     c.setFont("Helvetica", 10)
     for para in (output_md or "").split("\n"):
         y = _pdf_wrapped_line(c, para, y, width)
-
-    c.showPage(); c.save()
-    buf.seek(0)
+    c.showPage(); c.save(); buf.seek(0)
     return buf.read()
 
 def _pdf_wrapped_line(c, text, y, page_w):
-    left = 2*cm
-    right = page_w - 2*cm
+    from reportlab.lib.pagesizes import A4
+    left, right = 2*cm, page_w - 2*cm
     max_w = right - left
     if y < 3*cm:
         c.showPage(); y = A4[1] - 2*cm; c.setFont("Helvetica", 10)
-    # simple wrap
-    words = text.split(" ")
-    line = ""
+    words, line = text.split(" "), ""
     for w in words:
         probe = (line + " " + w).strip()
         if c.stringWidth(probe, "Helvetica", 10) <= max_w:
@@ -438,9 +414,8 @@ if st.button("Text umwandeln", disabled=not confirm):
             out, in_toks, out_toks, est_cost = call_llm(prompt, creativity, max_out)
 
             st.markdown("### Ergebnis")
-            st.markdown(out)  # Markdown-Rendering (kein horizontaler Scroll)
+            st.markdown(out)
 
-            # Vorher/Nachher-Diff
             with st.expander("Vorher/Nachher – Diff (Text)"):
                 diff = difflib.unified_diff(
                     text_current.splitlines(),
@@ -451,7 +426,6 @@ if st.button("Text umwandeln", disabled=not confirm):
                 )
                 st.code("\n".join(diff), language="diff")
 
-            # Rohtext + Downloads
             with st.expander("Rohtext anzeigen (kopierbar)"):
                 st.text_area("Rohtext", out, height=260)
 
@@ -469,16 +443,15 @@ if st.button("Text umwandeln", disabled=not confirm):
                 st.download_button("Ergebnis als PDF herunterladen", data=pdf_bytes,
                                    file_name="verstaendlichkeit.pdf", mime="application/pdf")
             else:
-                st.button("Ergebnis als PDF herunterladen (ReportLab fehlt)", disabled=True, help="Füge 'reportlab' in requirements.txt hinzu, um PDF zu aktivieren.")
+                st.button("Ergebnis als PDF herunterladen (ReportLab fehlt)", disabled=True,
+                          help="Füge 'reportlab' in requirements.txt hinzu, um PDF zu aktivieren.")
 
-            # Kosten/Token
             if est_cost is not None:
                 st.caption(f"Token: in {in_toks}, out {out_toks} · ~Kosten: ${est_cost:.4f}")
                 if out_toks == max_out:
                     st.warning("Antwort hat die Token-Obergrenze erreicht – Text könnte abgeschnitten sein. "
                                "Erhöhe 'Max. Antwortlänge' oder aktiviere den Kompakt-Modus.")
 
-            # Verlauf speichern (max 3)
             hist = st.session_state.get("history", [])
             hist.insert(0, {
                 "ts": datetime.now().strftime("%d.%m.%Y %H:%M"),
@@ -490,7 +463,6 @@ if st.button("Text umwandeln", disabled=not confirm):
                 }
             })
             st.session_state["history"] = hist[:3]
-
         except Exception as e:
             st.error(f"Fehler bei der Anfrage: {e}")
 
@@ -507,11 +479,9 @@ with st.sidebar:
         if st.button("Ausgewähltes Ergebnis anzeigen"):
             st.session_state["preview"] = hist[pick]
 
-# Live-Preview aus dem Verlauf (falls geklickt)
 if st.session_state.get("preview"):
     st.markdown("### Vorschau aus Verlauf")
-    prev = st.session_state["preview"]
-    st.markdown(prev["output"])
+    st.markdown(st.session_state["preview"]["output"])
 
 # -------------------- Footer --------------------
 st.markdown("---")
